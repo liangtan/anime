@@ -1,7 +1,7 @@
 /**
- * http://animejs.com
+ * http://anime-js.com
  * JavaScript animation engine
- * @version v2.0.1
+ * @version v2.0.2
  * @author Julian Garnier
  * @copyright ©2017 Julian Garnier
  * Released under the MIT license
@@ -244,10 +244,6 @@
     return [o];
   }
 
-  function arrayContains(arr, val) {
-    return arr.some(a => a === val);
-  }
-
   // Objects
 
   function objectHas(obj, prop) {
@@ -321,6 +317,7 @@
   function getUnit(val) {
     const split = /([\+\-]?[0-9#\.]+)(%|px|pt|em|rem|in|cm|mm|ex|pc|vw|vh|deg|rad|turn)?/.exec(val);
     if (split) return split[2];
+    // if (split && split[2] && val.indexOf(split[2], arrayLength(val) - arrayLength(split[2])) !== -1) return split[2];
   }
 
   function getTransformUnit(propName) {
@@ -350,9 +347,10 @@
   }
 
   function getAnimationType(el, prop) {
-    if (is.dom(el) && arrayContains(validTransforms, prop)) return 'transform';
-    if (is.dom(el) && (el.getAttribute(prop) || (is.svg(el) && el[prop]))) return 'attribute';
-    if (is.dom(el) && (prop !== 'transform' && getCSSValue(el, prop))) return 'css';
+    const isDom = is.dom(el);
+    if (isDom && validTransforms.some(a => a === prop)) return 'transform';
+    if (isDom && (el.getAttribute(prop) || (is.svg(el) && el[prop]))) return 'attribute';
+    if (isDom && (prop !== 'transform' && (prop in el.style))) return 'css';
     if (el[prop] != null) return 'object';
   }
 
@@ -396,9 +394,7 @@
 
   function validateValue(val, unit) {
     if (is.col(val)) return colorToRgb(val);
-    const originalUnit = getUnit(val);
-    const unitLess = originalUnit ? val.substr(0, arrayLength(val) - arrayLength(originalUnit)) : val;
-    return unit ? unitLess + unit : unitLess;
+    return unit && !isNaN(val) ? val + unit : val;
   }
 
   // Motion path
@@ -444,11 +440,11 @@
 
   function decomposeValue(val, unit) {
     const rgx = /-?\d*\.?\d+/g;
-    const value = validateValue((isPath(val) ? val.totalLength : val), unit) + '';
+    const value = validateValue((isPath(val) ? val.totalLength : val), unit);
     return {
       original: value,
-      numbers: value.match(rgx) ? value.match(rgx).map(Number) : [0],
-      strings: value.split(rgx)
+      numbers: !is.str(value) ? [value] : value.match(rgx) ? value.match(rgx).map(Number) : [0],
+      strings: is.str(value) ? value.split(rgx) : [0, 0]
     }
   }
 
@@ -675,8 +671,12 @@
     }
 
     function syncInstanceChildren(insTime) {
+      let i = 0;
       const children = instance.children;
-      for (let i = 0; i < arrayLength(children); i++) children[i].seek(insTime);
+      while (i < arrayLength(children)) {
+        children[i].seek(insTime);
+        i++;
+      }
     }
 
     function setAnimationsProgress(insTime) {
@@ -720,34 +720,27 @@
       if (instance[cb]) instance[cb](instance);
     }
 
-    function countIteration() {
-      if (instance.remaining && instance.remaining !== true) {
-        instance.remaining--;
-      }
-    }
-
     function setInstanceProgress(engineTime) {
       const insDuration = instance.duration;
       const insOffset = instance.offset;
       const insDelay = instance.delay;
       const insCurrentTime = instance.currentTime;
+      const insRemaining = instance.remaining;
       const insReversed = instance.reversed;
       const insTime = minMaxValue(adjustTime(engineTime), 0, insDuration);
-      if (insTime > insOffset && insTime < insDuration) {
+      if (insTime >= insOffset && insTime <= insDuration) {
         setAnimationsProgress(insTime);
         if (!instance.began && insTime >= insDelay) {
           instance.began = true;
           setCallback('begin');
         }
         setCallback('run');
-      } else {
-        if (insTime <= insOffset && insCurrentTime !== 0) {
-          setAnimationsProgress(0);
-          if (insReversed) countIteration();
-        }
-        if (insTime >= insDuration && insCurrentTime !== insDuration) {
-          setAnimationsProgress(insDuration);
-          if (!insReversed) countIteration();
+      }
+      if (insRemaining && insRemaining !== true) {
+        if (
+        (insReversed && insTime === insOffset && insCurrentTime !== 0) ||
+        (!insReversed && insTime === insDuration && insCurrentTime !== insDuration)) {
+          instance.remaining--;
         }
       }
       if (engineTime >= insDuration) {
@@ -825,7 +818,7 @@
       const instance = activeInstances[i];
       const animations = instance.animations;
       for (let a = arrayLength(animations)-1; a >= 0; a--) {
-        if (arrayContains(targetsArray, animations[a].animatable.target)) {
+        if (targetsArray.some(t => t === animations[a].animatable.target)) {
           animations.splice(a, 1);
           if (!arrayLength(animations)) instance.pause();
         }
@@ -840,21 +833,32 @@
     tl.duration = 0;
     tl.children = [];
     tl.add = function(instancesParams) {
+      tl.children.forEach( i => { i.began = true; i.completed = true; });
       toArray(instancesParams).forEach(insParams => {
-        const offset = insParams.offset;
         const tlDuration = tl.duration;
+        const insOffset = insParams.offset;
         insParams.autoplay = false;
-        insParams.offset = is.und(offset) ? tlDuration : getRelativeValue(offset, tlDuration);
+        insParams.offset = is.und(insOffset) ? tlDuration : getRelativeValue(insOffset, tlDuration);
+        tl.seek(insParams.offset);
         const ins = anime(insParams);
         if (ins.duration > tlDuration) tl.duration = ins.duration;
+        ins.began = true;
         tl.children.push(ins);
       });
+      tl.seek(0);
+      tl.reset();
+      for (let i = tl.children.length; i--; ){
+        const child = tl.children[i];
+        child.seek(child.offset); 
+        child.reset();
+      }
+      if (tl.autoplay) tl.play();
       return tl;
     }
     return tl;
   }
 
-  anime.version = '2.0.1';
+  anime.version = '2.0.2';
   anime.speed = 1;
   anime.running = activeInstances;
   anime.remove = removeTargets;
